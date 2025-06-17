@@ -1,0 +1,20 @@
+
+<!DOCTYPE html>
+<html>
+<head><title>Suivi de Colis</title></head>
+<body>
+  <h2>Suivi d'un colis</h2>
+  <form method="post">
+    Numéro du colis: <input type="text" name="numero"><br>
+    <input type="submit" value="Vérifier">
+  </form>
+  {% if colis %}
+    <h3>Résultat :</h3>
+    <p>Client: {{ colis['client'] }}</p>
+    <p>Destination: {{ colis['destination'] }}</p>
+    <p>Statut: {{ colis['statut'] }}</p>
+  {% elif colis is not none %}
+    <p>Aucun colis trouvé.</p>
+  {% endif %}
+</body>
+</html>
