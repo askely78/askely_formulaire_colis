@@ -229,3 +229,6 @@ def whatsapp():
 if __name__ == "__main__":
     init_db()
     app.run(host="0.0.0.0", port=PORT, debug=True)
+@app.route("/")
+def home():
+    return "✅ Askely Express fonctionne avec PostgreSQL et WhatsApp !"
