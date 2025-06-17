@@ -1,80 +1,113 @@
-
-from flask import Flask, request, render_template, redirect, url_for
-import sqlite3
-from twilio.rest import Client
+from flask import Flask, request, render_template
+from flask_sqlalchemy import SQLAlchemy
+from twilio.twiml.messaging_response import MessagingResponse
 import os
 
 app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///colis.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
 
-# Configuration Twilio (à personnaliser)
-TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
-TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
-TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER')
+class Colis(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    numero = db.Column(db.String(50), unique=True, nullable=False)
+    destinataire = db.Column(db.String(100), nullable=False)
+    adresse = db.Column(db.String(200), nullable=False)
+    statut = db.Column(db.String(100), default='En attente')
 
-client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+class Transporteur(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(100), nullable=False)
+    numero_whatsapp = db.Column(db.String(20), unique=True, nullable=False)
+    date_depart = db.Column(db.String(20), nullable=False)
+    ville_depart = db.Column(db.String(100), nullable=False)
+    ville_arrivee = db.Column(db.String(100), nullable=False)
 
-# Initialisation de la base de données
-def init_db():
-    conn = sqlite3.connect('colis.db')
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS transporteurs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nom TEXT,
-            telephone TEXT,
-            ville_depart TEXT,
-            ville_arrivee TEXT,
-            date_depart TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+@app.before_first_request
+def create_tables():
+    db.create_all()
 
 @app.route('/')
-def accueil():
+def index():
     return "Bienvenue sur Askely Express"
 
-@app.route('/inscription-transporteur', methods=['GET', 'POST'])
-def inscription_transporteur():
+@app.route('/admin', methods=['GET', 'POST'])
+def admin():
+    if request.method == 'POST':
+        numero = request.form['numero']
+        destinataire = request.form['destinataire']
+        adresse = request.form['adresse']
+        statut = request.form['statut']
+        colis = Colis(numero=numero, destinataire=destinataire, adresse=adresse, statut=statut)
+        db.session.add(colis)
+        db.session.commit()
+        return "Colis ajouté avec succès !"
+    return render_template('admin.html')
+
+@app.route('/suivi', methods=['GET', 'POST'])
+def suivi():
+    colis = None
+    if request.method == 'POST':
+        numero = request.form['numero']
+        colis = Colis.query.filter_by(numero=numero).first()
+    return render_template('suivi.html', colis=colis)
+
+@app.route('/register_transporteur', methods=['GET', 'POST'])
+def register_transporteur():
     if request.method == 'POST':
         nom = request.form['nom']
-        telephone = request.form['telephone']
+        numero_whatsapp = request.form['numero_whatsapp']
+        date_depart = request.form['date_depart']
         ville_depart = request.form['ville_depart']
         ville_arrivee = request.form['ville_arrivee']
-        date_depart = request.form['date_depart']
-
-        conn = sqlite3.connect('colis.db')
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO transporteurs (nom, telephone, ville_depart, ville_arrivee, date_depart) VALUES (?, ?, ?, ?, ?)",
-                       (nom, telephone, ville_depart, ville_arrivee, date_depart))
-        conn.commit()
-        conn.close()
-
-        # Message simulé de confirmation avec Twilio
-        message = client.messages.create(
-            body=f"Bonjour {nom}, merci pour votre inscription en tant que transporteur. Nous vous informerons dès qu’un client sélectionnera votre trajet.",
-            from_=TWILIO_PHONE_NUMBER,
-            to=telephone
+        t = Transporteur(
+            nom=nom,
+            numero_whatsapp=numero_whatsapp,
+            date_depart=date_depart,
+            ville_depart=ville_depart,
+            ville_arrivee=ville_arrivee
         )
-        return "Inscription réussie. Vous serez notifié pour les prochaines demandes."
-    return render_template('inscription_transporteur.html')
+        db.session.add(t)
+        db.session.commit()
+        return "Transporteur inscrit avec succès"
+    return """<form method='POST'>
+        Nom: <input type='text' name='nom'><br>
+        Numéro WhatsApp: <input type='text' name='numero_whatsapp'><br>
+        Date de départ: <input type='text' name='date_depart'><br>
+        Ville de départ: <input type='text' name='ville_depart'><br>
+        Ville d'arrivée: <input type='text' name='ville_arrivee'><br>
+        <input type='submit' value='S'inscrire'>
+    </form>"""
 
 @app.route('/webhook/whatsapp', methods=['POST'])
-def whatsapp_webhook():
-    incoming_msg = request.form.get('Body').lower()
-    from_number = request.form.get('From')
-
-    from twilio.twiml.messaging_response import MessagingResponse
+def whatsapp():
+    incoming_msg = request.values.get('Body', '').strip().lower()
     resp = MessagingResponse()
     msg = resp.message()
 
-    if "transporteur" in incoming_msg:
-        msg.body("📦 Pour devenir transporteur, veuillez remplir ce formulaire : https://askely-express.onrender.com/inscription-transporteur\n💰 L'inscription est payante. Merci de votre compréhension.")
+    if incoming_msg in ['bonjour', 'hello', 'salut']:
+        msg.body(
+            "👋 Bienvenue chez *Askely Express* !
+Répondez par :
+"
+            "1. Envoyer un colis 📦
+"
+            "2. Devenir transporteur 🚐
+"
+            "3. Suivre un colis 🔍"
+        )
+    elif incoming_msg == '1':
+        msg.body("📦 Pour envoyer un colis, veuillez visiter : https://askely-express.onrender.com/admin")
+    elif incoming_msg == '2':
+        msg.body("🚐 Pour devenir transporteur, visitez : https://askely-express.onrender.com/register_transporteur")
+    elif incoming_msg == '3':
+        msg.body("🔍 Pour suivre un colis, visitez : https://askely-express.onrender.com/suivi")
     else:
-        msg.body("❓ Je n'ai pas compris votre demande. Répondez par 'transporteur' pour vous inscrire.")
+        msg.body("❌ Je n’ai pas compris. Répondez par :
+1, 2 ou 3.")
 
     return str(resp)
 
 if __name__ == '__main__':
-    init_db()
-    app.run(host="0.0.0.0", port=10000, debug=True)
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, debug=True)
