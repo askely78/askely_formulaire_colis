@@ -1,8 +1,7 @@
 services:
   - type: web
-    name: askely-formulaire-colis
+    name: askely-express
     env: python
-    plan: free
     buildCommand: ""
     startCommand: python app.py
     envVars:

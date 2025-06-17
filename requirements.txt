@@ -1,8 +1,4 @@
 Flask==2.3.3
-Jinja2==3.1.2
-Werkzeug==2.3.7
-MarkupSafe==2.1.5
-itsdangerous==2.1.2
-click==8.1.7
-gunicorn==21.2.0
-
+Flask-SQLAlchemy==3.1.1
+requests==2.32.2
+twilio==9.6.3
