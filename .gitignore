@@ -1,1 +1,6 @@
 askely_express.db
+*.db
+__pycache__/
+*.pyc
+*.zip
+.env
