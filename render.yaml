@@ -1,9 +1,10 @@
 services:
   - type: web
-    name: askely-express
+    name: askely-express-colis
     env: python
+    plan: free
     buildCommand: ""
-    startCommand: python app.py
+    startCommand: "python app.py"
     envVars:
-      - key: FLASK_ENV
-        value: development
+      - key: PORT
+        value: 10000
