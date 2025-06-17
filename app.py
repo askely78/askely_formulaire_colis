@@ -1,234 +1,148 @@
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
-import psycopg2, psycopg2.extras
+import psycopg2
 import os
 
-# ────────────────────────────────────────────────────────────────────────────────
-# CONFIGURATION
-# ────────────────────────────────────────────────────────────────────────────────
 app = Flask(__name__)
-DATABASE_URL = os.getenv("DATABASE_URL")           # valeur rendue par Render
-PORT         = int(os.getenv("PORT", 10000))       # Render injecte aussi PORT
 
-# ────────────────────────────────────────────────────────────────────────────────
-# UTILITAIRES BD
-# ────────────────────────────────────────────────────────────────────────────────
+# Connexion PostgreSQL avec psycopg2
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
 def get_conn():
-    """Connexion PostgreSQL (RealDictCursor pour dict-like)."""
-    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    return psycopg2.connect(DATABASE_URL, sslmode='require')
 
+# Création des tables si elles n'existent pas
 def init_db():
-    """Crée les tables si elles n’existent pas."""
     conn = get_conn()
-    cur  = conn.cursor()
-    cur.execute("""
+    cursor = conn.cursor()
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS transporteurs (
-            id              SERIAL PRIMARY KEY,
-            nom             TEXT,
-            ville_depart    TEXT,
-            ville_arrivee   TEXT,
-            date_depart     TEXT,
+            id SERIAL PRIMARY KEY,
+            nom TEXT,
+            ville_depart TEXT,
+            ville_arrivee TEXT,
+            date_depart TEXT,
             numero_whatsapp TEXT,
-            paiement        TEXT
-        );
+            paiement TEXT
+        )
     """)
-    cur.execute("""
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS colis (
-            id              SERIAL PRIMARY KEY,
-            expediteur      TEXT,
-            destinataire    TEXT,
-            date_envoi      TEXT,
+            id SERIAL PRIMARY KEY,
+            expediteur TEXT,
+            destinataire TEXT,
+            date_envoi TEXT,
             transporteur_id INTEGER REFERENCES transporteurs(id)
-        );
+        )
     """)
     conn.commit()
-    cur.close()
     conn.close()
 
-# ────────────────────────────────────────────────────────────────────────────────
-# ROUTE D’ACCUEIL – évite le 404 sur /
-# ────────────────────────────────────────────────────────────────────────────────
-@app.route("/")
-def home():
-    return "✅ Askely Express (Flask + PostgreSQL) est en ligne."
+# Variables globales pour suivre la saisie
+utilisateurs = {}
 
-# Mémoire courte pour l’utilisateur (clé = numéro WhatsApp)
-user_cache = {}
-
-# ────────────────────────────────────────────────────────────────────────────────
-# WEBHOOK WHATSAPP
-# ────────────────────────────────────────────────────────────────────────────────
 @app.route("/webhook/whatsapp", methods=["POST"])
-def whatsapp():
-    incoming = request.values.get("Body", "").strip()
-    num      = request.values.get("From", "")                   # ex: whatsapp:+2126...
-    txt      = incoming.lower()
-
+def whatsapp_webhook():
+    incoming_msg = request.values.get('Body', '').strip().lower()
+    sender = request.values.get('From', '')
     resp = MessagingResponse()
-    msg  = resp.message()
+    msg = resp.message()
 
-    # ── MENU PRINCIPAL ────────────────────────────────────────────────────────
-    if txt in {"bonjour", "salut", "hello"}:
-        msg.body(
-            "👋 Bonjour ! Bienvenue chez *Askely Express* 🇲🇦\n\n"
-            "Que souhaitez-vous faire ? Répondez avec :\n"
-            "1️⃣ Envoyer un colis\n"
-            "2️⃣ Devenir transporteur\n"
-            "3️⃣ Suivre un colis"
-        )
-        user_cache.pop(num, None)                       # reset éventuel
-        return str(resp)
+    user_state = utilisateurs.get(sender, {})
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # 1) ENVOI DE COLIS
-    # ══════════════════════════════════════════════════════════════════════════
-    cache = user_cache.get(num, {})
-    step  = cache.get("step")
+    if any(x in incoming_msg for x in ["bonjour", "salut", "hello"]):
+        msg.body("👋 Bonjour ! Bienvenue chez *Askely Express* 🇲🇦\n\nQue souhaitez-vous faire ? Répondez avec :\n1️⃣ Envoyer un colis\n2️⃣ Devenir transporteur\n3️⃣ Suivre un colis")
+        utilisateurs[sender] = {}
 
-    if txt.startswith("1") or "envoyer un colis" in txt and not step:
-        user_cache[num] = {"step": "colis_info"}
-        msg.body(
-            "📦 Veuillez envoyer les infos du colis (1 seul message) :\n"
-            "`Nom expéditeur - Nom destinataire - Date (JJ/MM/AAAA)`"
-        )
-        return str(resp)
+    elif incoming_msg in ["1", "envoyer un colis", "envoi colis", "je veux envoyer un colis"]:
+        msg.body("📦 Veuillez envoyer les infos du colis au format :\nExpéditeur - Destinataire - Date d’envoi (JJ/MM/AAAA)")
+        utilisateurs[sender] = {"étape": "envoi_infos"}
 
-    if step == "colis_info" and "-" in txt:
-        try:
-            exp, dest, date_envoi = [x.strip() for x in incoming.split("-")]
-        except ValueError:
-            msg.body("❌ Format invalide. Réessayez (3 éléments séparés par `-`).")
-            return str(resp)
+    elif incoming_msg in ["2", "devenir transporteur", "je veux devenir transporteur"]:
+        msg.body("🚚 Pour devenir transporteur, envoyez vos infos :\nNom - Ville départ - Ville arrivée - Date (JJ/MM/AAAA) - Numéro WhatsApp - Paiement OK")
+        utilisateurs[sender] = {"étape": "transporteur_infos"}
 
-        # stocker dans cache
-        user_cache[num] = {
-            "step":        "choix_transporteur",
-            "expediteur":  exp,
-            "destinataire":dest,
-            "date":        date_envoi
-        }
+    elif incoming_msg in ["3", "suivre un colis", "suivi", "suivi colis"]:
+        msg.body("🔎 Entrez le nom de l’expéditeur pour suivre votre colis.")
+        utilisateurs[sender] = {"étape": "suivi"}
 
-        # chercher transporteurs
-        conn = get_conn(); cur = conn.cursor()
-        cur.execute(
-            "SELECT id, nom, ville_depart, ville_arrivee "
-            "FROM transporteurs WHERE date_depart = %s",
-            (date_envoi,)
-        )
-        dispo = cur.fetchall(); cur.close(); conn.close()
+    elif user_state.get("étape") == "envoi_infos" and incoming_msg.count("-") == 2:
+        expediteur, destinataire, date_str = [x.strip() for x in incoming_msg.split("-")]
+        utilisateurs[sender] = {"étape": "choix_transporteur", "expediteur": expediteur, "destinataire": destinataire, "date": date_str}
 
-        if not dispo:
-            msg.body("❌ Aucun transporteur dispo à cette date. Envoyez une autre date.")
-            user_cache.pop(num, None)
-            return str(resp)
+        conn = get_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, nom, ville_depart, ville_arrivee, numero_whatsapp FROM transporteurs WHERE date_depart = %s", (date_str,))
+        resultats = cursor.fetchall()
+        conn.close()
 
-        # afficher la liste
-        listing = "\n".join(
-            f"*{t['id']}* – {t['nom']} ({t['ville_depart']} ➡️ {t['ville_arrivee']})"
-            for t in dispo
-        )
-        msg.body(
-            f"🚚 Transporteurs disponibles le {date_envoi} :\n{listing}\n\n"
-            "Répondez : `Choisir <ID>`"
-        )
-        return str(resp)
-
-    # Choix du transporteur
-    if txt.startswith("choisir") and step == "choix_transporteur":
-        try:
-            t_id = int(txt.split()[1])
-        except (IndexError, ValueError):
-            msg.body("❌ Format : `Choisir <ID>`")
-            return str(resp)
-
-        exp  = cache["expediteur"]; dest = cache["destinataire"]; date = cache["date"]
-        conn = get_conn(); cur = conn.cursor()
-
-        # Vérifier le transporteur
-        cur.execute("SELECT nom, numero_whatsapp FROM transporteurs WHERE id=%s", (t_id,))
-        tr = cur.fetchone()
-        if not tr:
-            msg.body("❌ ID transporteur introuvable.")
-            cur.close(); conn.close(); user_cache.pop(num, None)
-            return str(resp)
-
-        # Enregistrement colis
-        cur.execute(
-            "INSERT INTO colis (expediteur, destinataire, date_envoi, transporteur_id) "
-            "VALUES (%s,%s,%s,%s) RETURNING id",
-            (exp, dest, date, t_id)
-        )
-        colis_id = cur.fetchone()["id"]
-        conn.commit(); cur.close(); conn.close()
-        user_cache.pop(num, None)
-
-        msg.body(
-            f"✅ Colis *#{colis_id}* enregistré avec *{tr['nom']}*.\n"
-            f"📲 Contactez-le : {tr['numero_whatsapp']}"
-        )
-        return str(resp)
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # 2) INSCRIPTION TRANSPORTEUR
-    # ══════════════════════════════════════════════════════════════════════════
-    if txt.startswith("2") or "devenir transporteur" in txt:
-        msg.body(
-            "🚚 Envoyez vos infos (1 seul message) :\n"
-            "`Nom - Ville départ - Ville arrivée - Date (JJ/MM/AAAA) - WhatsApp - Paiement OK`"
-        )
-        user_cache[num] = {"step": "insc_transporteur"}
-        return str(resp)
-
-    if user_cache.get(num, {}).get("step") == "insc_transporteur" and txt.count("-") == 5:
-        nom, vdep, varr, date_dep, numero, paiement = [x.strip() for x in incoming.split("-")]
-        conn = get_conn(); cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO transporteurs "
-            "(nom, ville_depart, ville_arrivee, date_depart, numero_whatsapp, paiement) "
-            "VALUES (%s,%s,%s,%s,%s,%s)",
-            (nom, vdep, varr, date_dep, numero, paiement)
-        )
-        conn.commit(); cur.close(); conn.close()
-        user_cache.pop(num, None)
-        msg.body("✅ Inscription réussie ! Vous recevrez les notifications des clients.")
-        return str(resp)
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # 3) SUIVI DE COLIS PAR NOM EXPÉDITEUR
-    # ══════════════════════════════════════════════════════════════════════════
-    if txt.startswith("3") or "suivre un colis" in txt:
-        msg.body("🔍 Envoyez *le nom d’expéditeur* pour voir le dernier colis.")
-        return str(resp)
-
-    if len(txt) > 1:  # recherche par nom
-        conn = get_conn(); cur = conn.cursor()
-        cur.execute("""
-            SELECT c.id, c.date_envoi, t.nom AS tr_nom, t.numero_whatsapp
-            FROM colis c
-            JOIN transporteurs t ON c.transporteur_id = t.id
-            WHERE LOWER(c.expediteur) LIKE %s
-            ORDER BY c.id DESC LIMIT 1
-        """, (f"%{txt}%",))
-        row = cur.fetchone(); cur.close(); conn.close()
-        if row:
-            msg.body(
-                f"📦 Colis #{row['id']} (date {row['date_envoi']}) avec transporteur {row['tr_nom']}.\n"
-                f"📲 Contact : {row['numero_whatsapp']}"
-            )
+        if resultats:
+            reponse = f"🚚 Transporteurs disponibles le {date_str} :\n"
+            for r in resultats:
+                reponse += f"ID {r[0]} - {r[1]} ({r[2]} ➡️ {r[3]}) 📱 {r[4]}\n"
+            reponse += "\nRépondez avec : choisir [ID du transporteur]"
         else:
-            msg.body("❌ Aucun colis correspondant à ce nom.")
-        return str(resp)
+            reponse = "❌ Aucun transporteur disponible ce jour-là."
+        msg.body(reponse)
 
-    # ── Catch-all ────────────────────────────────────────────────────────────
-    msg.body("🤖 Je n’ai pas compris. Envoyez `Bonjour` pour voir les options.")
+    elif incoming_msg.startswith("choisir"):
+        try:
+            transporteur_id = int(incoming_msg.split(" ")[1])
+            data = utilisateurs.get(sender, {})
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO colis (expediteur, destinataire, date_envoi, transporteur_id) VALUES (%s, %s, %s, %s)",
+                           (data["expediteur"], data["destinataire"], data["date"], transporteur_id))
+            conn.commit()
+            cursor.execute("SELECT numero_whatsapp FROM transporteurs WHERE id = %s", (transporteur_id,))
+            numero = cursor.fetchone()[0]
+            conn.close()
+            msg.body(f"✅ Colis enregistré avec le transporteur ID {transporteur_id}.\n📲 Contact : {numero}")
+            utilisateurs[sender] = {}
+        except:
+            msg.body("❌ Erreur. Veuillez réessayer.")
+
+    elif user_state.get("étape") == "transporteur_infos" and incoming_msg.count("-") == 5:
+        try:
+            nom, vdep, varr, date_dep, numero, paiement = [x.strip() for x in incoming_msg.split("-")]
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO transporteurs (nom, ville_depart, ville_arrivee, date_depart, numero_whatsapp, paiement) VALUES (%s, %s, %s, %s, %s, %s)",
+                           (nom, vdep, varr, date_dep, numero, paiement))
+            conn.commit()
+            conn.close()
+            msg.body("✅ Inscription validée ! Vous recevrez une notification dès qu’un colis correspond à votre trajet.")
+            utilisateurs[sender] = {}
+        except:
+            msg.body("❌ Format invalide. Vérifiez les données.")
+
+    elif user_state.get("étape") == "suivi":
+        conn = get_conn()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT c.id, t.nom, t.numero_whatsapp 
+            FROM colis c JOIN transporteurs t ON c.transporteur_id = t.id 
+            WHERE c.expediteur ILIKE %s 
+            ORDER BY c.id DESC LIMIT 1
+        """, (f"%{incoming_msg}%",))
+        resultat = cursor.fetchone()
+        conn.close()
+        if resultat:
+            msg.body(f"📦 Colis ID {resultat[0]} en cours avec le transporteur {resultat[1]}.\n📲 Contact : {resultat[2]}")
+        else:
+            msg.body("❌ Aucun colis trouvé pour cet expéditeur.")
+        utilisateurs[sender] = {}
+
+    else:
+        msg.body("❓ Je n’ai pas compris. Répondez avec :\n1️⃣ Envoyer un colis\n2️⃣ Devenir transporteur\n3️⃣ Suivre un colis")
+        utilisateurs[sender] = {}
+
     return str(resp)
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Lancement
-# ────────────────────────────────────────────────────────────────────────────────
+@app.route("/")
+def index():
+    return "✅ Askely Express est en ligne."
+
 if __name__ == "__main__":
     init_db()
-    app.run(host="0.0.0.0", port=PORT, debug=True)
-@app.route("/")
-def home():
-    return "✅ Askely Express fonctionne avec PostgreSQL et WhatsApp !"
+    app.run(host="0.0.0.0", port=10000, debug=True)
