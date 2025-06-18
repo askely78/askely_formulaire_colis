@@ -1,21 +1,17 @@
-services:
-  - type: web
-    name: askely-express-colis
-    env: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: askely-colis-db
-          property: connectionString
-      - key: TWILIO_ACCOUNT_SID
-        sync: false
-      - key: TWILIO_AUTH_TOKEN
-        sync: false
-      - key: TWILIO_WHATSAPP_FROM
-        sync: false
 databases:
-  - name: askely-colis-db
-    plan: free
+- name: askely-db
+  plan: free
+  region: oregon
+services:
+- buildCommand: pip install -r requirements.txt
+  env: python
+  envVars:
+    DATABASE_URL:
+      fromService: askely-db
+      property: connectionString
+    OPENAI_API_KEY:
+      sync: true
+  name: askely-formulaire-colis
+  plan: free
+  startCommand: python app.py
+  type: web
