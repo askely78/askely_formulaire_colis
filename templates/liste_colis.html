@@ -1,0 +1,15 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Liste des colis</title>
+</head>
+<body>
+    <h2>Colis enregistrés</h2>
+    <ul>
+        {% for c in colis %}
+        <li>Expéditeur : {{ c.expediteur }} - Destinataire : {{ c.destinataire }} - Transporteur ID : {{ c.transporteur_id }} - Date : {{ c.date_envoi }}</li>
+        {% endfor %}
+    </ul>
+</body>
+</html>

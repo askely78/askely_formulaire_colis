@@ -1,0 +1,15 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Liste des transporteurs</title>
+</head>
+<body>
+    <h2>Transporteurs disponibles</h2>
+    <ul>
+        {% for t in transporteurs %}
+        <li>{{ t.nom }} - {{ t.ville_depart }} ➡️ {{ t.ville_arrivee }} ({{ t.date_depart }}) - {{ t.numero_whatsapp }}</li>
+        {% endfor %}
+    </ul>
+</body>
+</html>
